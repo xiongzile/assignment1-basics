@@ -16,19 +16,23 @@ class BPETokenizer:
         return
 
     def encode(self, text: str) -> list[int]:
-        return
+        return list(text.encode(encoding="utf-8"))
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         return
 
     def decode(self, ids: list[int]) -> str:
-        return
+        return b"".join(self.vocab[i] for i in ids).decode(encoding="utf-8")
 
     @staticmethod
     def bpe_run_train_impl(input_path: str | os.PathLike,
                            vocab_size: int,
                            special_tokens: list[str],
                            **kwargs, ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-        raise NotImplementedError
+        f = open(input_path, mode="r", encoding="utf-8")
+        # assume the text is not too long
+        text = f.read()
+
+        f.close()
         return tuple(dict())
 

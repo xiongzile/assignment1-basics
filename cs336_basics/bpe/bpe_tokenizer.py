@@ -1,9 +1,11 @@
 import os
-import re
-from typing import Iterable, Iterator
+import regex as re
+from math import inf
+from typing import Iterable
 
 # vocab = [(0, b"\x00"), (1, b"\x01")..., (256, b"123"), (257, b"444")]
 # merges = [(b"\x00", b"\x01"), (b"123", b"444")]
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 class BPETokenizer:
     def __init__(self,
@@ -14,6 +16,9 @@ class BPETokenizer:
         self.merges = merges
         self.special_tokens = special_tokens
 
+        self.bytes2tokenID = {v:k for k, v in vocab.items()}
+        self.merges2rank = {t: i for i, t in enumerate(merges)}
+
     @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
         return
@@ -21,16 +26,17 @@ class BPETokenizer:
     def encode(self, text: str) -> list[int]:
         if self.special_tokens is None:
             return self.encode_single(text)
+        tks = BPETokenizer.gpt2_split(self.special_tokens, text)
+        res = []
+        for tk in tks:
+            if not tk:
+                continue
 
-        sorted_tokens = sorted(self.special_tokens, key=len, reverse=True)
-        pattern = re.compile("(" + "|".join(map(re.escape, sorted_tokens)) + ")")
-        contents = pattern.split(text)
-        res: list[int] = list()
-        for content in contents:
-            if not content in self.special_tokens:
-                res = res + self.encode_single(content)
-            else:
-                res.append(self.find_tokenID_from_bytes(content.encode(encoding="utf-8")))
+            if tk in self.special_tokens:
+                res.append(self.find_tokenID_from_bytes(tk.encode(encoding="utf-8")))
+                continue
+
+            res.extend(self.encode_single(tk))
 
         return res
 
@@ -39,49 +45,43 @@ class BPETokenizer:
             return []
         bs: list[bytes] = [bytes([b]) for b in text.encode("utf-8")]
         while True:
-            tmp: list[bytes] = list()
+            tmp: list[bytes] = []
             i = 0
             mergedPair = (len(bs), len(bs))
             rank = len(self.merges)
 
             while i + 1 < len(bs):
-                searched = self.search_tuple_in_merges((bs[i], bs[i+1]))
-                cur_rank = searched[0]
-                if searched[2] and cur_rank < rank:
+                searched = self.merges2rank.get((bs[i], bs[i+1]), inf)
+                cur_rank = searched
+                if cur_rank < rank:
                     mergedPair = (i, i + 1)
                     rank = cur_rank
                 i = i + 1
 
             if mergedPair == (len(bs), len(bs)): # nothing to merge
                 break
-
+            pr = (bs[mergedPair[0]], bs[mergedPair[1]])
+            if pr[0] == b"\n" or pr[1] == b"\n":
+                pass
             i = 0
             while i < len(bs): # implement **real** merge, very ugly
-                if i != mergedPair[0]:
-                    tmp.append(bs[i])
-                else:
-                    tmp.append(bs[i]+bs[i+1])
+                if i + 1 < len(bs) and bs[i] == pr[0] and bs[i+1] == pr[1]:
+                    tmp.append(bs[i] + bs[i + 1])
                     i = i + 1
+                else:
+                    tmp.append(bs[i])
                 i = i + 1
             bs = tmp
         return [self.find_tokenID_from_bytes(b) for b in bs]
 
-
     def find_tokenID_from_bytes(self, bs: bytes) -> int:
-        # TODO: optimize
-        for i, v in self.vocab.items():
-            if v == bs:
-                return i
-        raise FUCK_YOU
+        return self.bytes2tokenID[bs]
 
-    def search_tuple_in_merges(self, tmp_tuple: tuple[bytes, bytes]) -> tuple[int, int, bool]:
-        for i, v in enumerate(self.merges):
-            if v == tmp_tuple:
-                return i, i + 1, True
-        return -1, -1, False
-
-    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
-        return
+    def encode_iterable(self, iterable: Iterable[str]) -> list[int]:
+        t = "" # simple implement here. It's more complex to support real stream handling.
+        for text in iterable:
+            t += text
+        return self.encode(t)
 
     def decode(self, ids: list[int]) -> str:
         return b"".join(self.vocab[i] for i in ids).decode(encoding="utf-8", errors="replace")
@@ -91,13 +91,29 @@ class BPETokenizer:
                            vocab_size: int,
                            special_tokens: list[str],
                            **kwargs, ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+
+        vocab = {i: bytes([i]) for i in range(0, 256)}
+        for idx, tk in enumerate(special_tokens):
+            vocab[vocab_size-idx] = tk.encode(encoding="utf-8")
+
+
         f = open(input_path, mode="r", encoding="utf-8")
-        # assume the text is not too long
         text = f.read()
+        tks = BPETokenizer.gpt2_split(special_tokens, text)
+        pass
 
         f.close()
         raise NotImplementedError
-        return tuple(dict())
 
-class FUCK_YOU(Exception):
-    pass
+    @staticmethod
+    def gpt2_split(special_tokens: list[str], text: str) -> list[str]:
+        tks = []
+        sorted_tokens = sorted(special_tokens, key=len, reverse=True)
+        pattern = re.compile("(" + "|".join(map(re.escape, sorted_tokens)) + ")")
+        contents = pattern.split(text)
+        for c in contents:
+            if c in special_tokens:
+                tks.append(c)
+                continue
+            tks.extend([m.group(0) for m in re.finditer(PAT, c)])
+        return tks
